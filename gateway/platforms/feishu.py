@@ -593,6 +593,11 @@ def _strip_redundant_leading_mention_text(content: str, *, user_id: str, user_na
     return text
 
 
+def _short_log_text(value: str, limit: int = 500) -> str:
+    text = (value or "").replace("\n", "\\n")
+    return text if len(text) <= limit else text[:limit] + "...<truncated>"
+
+
 def _build_mention_text_payload(content: str, *, user_id: str, user_name: str = "") -> str:
     content = _strip_redundant_leading_mention_text(
         content,
@@ -1831,6 +1836,25 @@ class FeishuAdapter(BasePlatformAdapter):
                     mention_user_id=chunk_mention_id,
                     mention_user_name=chunk_mention_name,
                 )
+                if chunk_mention_id:
+                    stripped_chunk = _strip_redundant_leading_mention_text(
+                        chunk,
+                        user_id=chunk_mention_id,
+                        user_name=chunk_mention_name,
+                    )
+                    logger.info(
+                        "[Feishu] Outbound sender mention payload: chat_id=%s reply_to=%s "
+                        "msg_type=%s mention_user_id=%s mention_user_name=%r "
+                        "stripped_leading_text_mention=%s original_prefix=%r payload=%s",
+                        chat_id,
+                        reply_to or "",
+                        msg_type,
+                        chunk_mention_id,
+                        chunk_mention_name,
+                        stripped_chunk != chunk,
+                        _short_log_text(chunk, 180),
+                        _short_log_text(payload, 800),
+                    )
                 try:
                     response = await self._feishu_send_with_retry(
                         chat_id=chat_id,
@@ -1913,6 +1937,25 @@ class FeishuAdapter(BasePlatformAdapter):
                 mention_user_id=mention_user_id,
                 mention_user_name=mention_user_name,
             )
+            if mention_user_id:
+                stripped_content = _strip_redundant_leading_mention_text(
+                    content,
+                    user_id=mention_user_id,
+                    user_name=mention_user_name,
+                )
+                logger.info(
+                    "[Feishu] Outbound sender mention edit payload: chat_id=%s message_id=%s "
+                    "msg_type=%s mention_user_id=%s mention_user_name=%r "
+                    "stripped_leading_text_mention=%s original_prefix=%r payload=%s",
+                    chat_id,
+                    message_id,
+                    msg_type,
+                    mention_user_id,
+                    mention_user_name,
+                    stripped_content != content,
+                    _short_log_text(content, 180),
+                    _short_log_text(payload, 800),
+                )
             body = self._build_update_message_body(msg_type=msg_type, content=payload)
             request = self._build_update_message_request(message_id=message_id, request_body=body)
             response = await asyncio.to_thread(self._client.im.v1.message.update, request)
