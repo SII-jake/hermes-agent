@@ -2061,6 +2061,49 @@ class TestAdapterBehavior(unittest.TestCase):
         self.assertNotEqual(first_row[0]["user_name"], raw_id)
 
     @patch.dict(os.environ, {}, clear=True)
+    def test_send_mention_strips_redundant_raw_open_id_prefix(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        captured = {}
+
+        class _MessageAPI:
+            def reply(self, request):
+                captured["request"] = request
+                return SimpleNamespace(
+                    success=lambda: True,
+                    data=SimpleNamespace(message_id="om_reply"),
+                )
+
+        adapter._client = SimpleNamespace(
+            im=SimpleNamespace(v1=SimpleNamespace(message=_MessageAPI()))
+        )
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        raw_id = "ou_f58197eab3309e7f287046f37969d8d8"
+        with patch("gateway.platforms.feishu.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(
+                adapter.send(
+                    chat_id="oc_chat",
+                    content=f"@{raw_id} Hi!",
+                    reply_to="om_parent",
+                    metadata={
+                        "feishu_mention_user_id": raw_id,
+                    },
+                )
+            )
+
+        self.assertTrue(result.success)
+        body = captured["request"].request_body
+        payload = json.loads(body.content)
+        first_row = payload["zh_cn"]["content"][0]
+        self.assertEqual(first_row[0], {"tag": "at", "user_id": raw_id, "user_name": "user"})
+        self.assertEqual(first_row[2], {"tag": "text", "text": "Hi!"})
+
+    @patch.dict(os.environ, {}, clear=True)
     def test_edit_preserves_sender_mention_for_streaming_message(self):
         from gateway.config import PlatformConfig
         from gateway.platforms.feishu import FeishuAdapter

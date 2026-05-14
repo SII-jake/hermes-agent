@@ -569,7 +569,35 @@ def _safe_mention_display_name(*, user_id: str, user_name: str = "") -> str:
     return "user"
 
 
+def _strip_redundant_leading_mention_text(content: str, *, user_id: str, user_name: str = "") -> str:
+    """Remove a model-generated leading @target when we already send native <at>."""
+    text = content or ""
+    candidates = [user_id]
+    display = (user_name or "").strip()
+    if display and display != user_id and not _is_feishu_raw_user_id(display):
+        candidates.append(display)
+
+    remaining = text.lstrip()
+    for candidate in candidates:
+        candidate = (candidate or "").strip()
+        if not candidate:
+            continue
+        prefix = f"@{candidate}"
+        if not remaining.startswith(prefix):
+            continue
+        after = remaining[len(prefix):]
+        if after and after[0] not in _MENTION_BOUNDARY_CHARS:
+            continue
+        return after.lstrip()
+    return text
+
+
 def _build_mention_post_payload(content: str, *, user_id: str, user_name: str = "") -> str:
+    content = _strip_redundant_leading_mention_text(
+        content,
+        user_id=user_id,
+        user_name=user_name,
+    )
     display_name = _safe_mention_display_name(user_id=user_id, user_name=user_name)
     at_tag: Dict[str, str] = {"tag": "at", "user_id": user_id, "user_name": display_name}
     prefix_row: List[Dict[str, str]] = [at_tag, {"tag": "text", "text": " "}]
@@ -4331,6 +4359,11 @@ class FeishuAdapter(BasePlatformAdapter):
         if not user_id:
             return content
         label = _safe_mention_display_name(user_id=user_id, user_name=user_name)
+        content = _strip_redundant_leading_mention_text(
+            content,
+            user_id=user_id,
+            user_name=user_name,
+        )
         return f"@{label} {content}" if content else f"@{label}"
 
     def _remember_outbound_mention(self, message_id: Optional[str], *, user_id: str, user_name: str) -> None:
