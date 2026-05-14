@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import html
 import itertools
 import json
 import logging
@@ -592,32 +593,20 @@ def _strip_redundant_leading_mention_text(content: str, *, user_id: str, user_na
     return text
 
 
-def _build_mention_post_payload(content: str, *, user_id: str, user_name: str = "") -> str:
+def _build_mention_text_payload(content: str, *, user_id: str, user_name: str = "") -> str:
     content = _strip_redundant_leading_mention_text(
         content,
         user_id=user_id,
         user_name=user_name,
     )
     display_name = _safe_mention_display_name(user_id=user_id, user_name=user_name)
-    at_tag: Dict[str, str] = {"tag": "at", "user_id": user_id, "user_name": display_name}
-    prefix_row: List[Dict[str, str]] = [at_tag, {"tag": "text", "text": " "}]
-
-    if not content:
-        rows = [prefix_row]
-    elif _MARKDOWN_HINT_RE.search(content) and not _MARKDOWN_TABLE_RE.search(content):
-        body_rows = _build_markdown_post_rows(content)
-        rows = [prefix_row + body_rows[0], *body_rows[1:]]
-    else:
-        rows = [prefix_row + [{"tag": "text", "text": content}]]
-
-    return json.dumps(
-        {
-            "zh_cn": {
-                "content": rows,
-            }
-        },
-        ensure_ascii=False,
+    at_prefix = (
+        f'<at user_id="{html.escape(user_id, quote=True)}">'
+        f"{html.escape(display_name)}"
+        "</at>"
     )
+    text = f"{at_prefix} {content}" if content else at_prefix
+    return json.dumps({"text": text}, ensure_ascii=False)
 
 
 def _build_markdown_post_rows(content: str) -> List[List[Dict[str, str]]]:
@@ -4397,7 +4386,7 @@ class FeishuAdapter(BasePlatformAdapter):
     ) -> tuple[str, str]:
         mention_user_id = (mention_user_id or "").strip()
         if mention_user_id:
-            return "post", _build_mention_post_payload(
+            return "text", _build_mention_text_payload(
                 content,
                 user_id=mention_user_id,
                 user_name=(mention_user_name or "").strip(),

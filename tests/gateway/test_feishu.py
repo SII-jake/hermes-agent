@@ -2010,12 +2010,9 @@ class TestAdapterBehavior(unittest.TestCase):
 
         self.assertTrue(result.success)
         body = captured["request"].request_body
-        self.assertEqual(body.msg_type, "post")
+        self.assertEqual(body.msg_type, "text")
         payload = json.loads(body.content)
-        first_row = payload["zh_cn"]["content"][0]
-        self.assertEqual(first_row[0], {"tag": "at", "user_id": "ou_user", "user_name": "张三"})
-        self.assertEqual(first_row[1], {"tag": "text", "text": " "})
-        self.assertEqual(first_row[2], {"tag": "text", "text": "hello"})
+        self.assertEqual(payload["text"], '<at user_id="ou_user">张三</at> hello')
 
     @patch.dict(os.environ, {}, clear=True)
     def test_send_mention_does_not_display_raw_open_id_when_name_missing(self):
@@ -2055,10 +2052,10 @@ class TestAdapterBehavior(unittest.TestCase):
 
         self.assertTrue(result.success)
         body = captured["request"].request_body
+        self.assertEqual(body.msg_type, "text")
         payload = json.loads(body.content)
-        first_row = payload["zh_cn"]["content"][0]
-        self.assertEqual(first_row[0], {"tag": "at", "user_id": raw_id, "user_name": "user"})
-        self.assertNotEqual(first_row[0]["user_name"], raw_id)
+        self.assertEqual(payload["text"], f'<at user_id="{raw_id}">user</at> Hi!')
+        self.assertNotIn(f">{raw_id}<", payload["text"])
 
     @patch.dict(os.environ, {}, clear=True)
     def test_send_mention_strips_redundant_raw_open_id_prefix(self):
@@ -2098,10 +2095,10 @@ class TestAdapterBehavior(unittest.TestCase):
 
         self.assertTrue(result.success)
         body = captured["request"].request_body
+        self.assertEqual(body.msg_type, "text")
         payload = json.loads(body.content)
-        first_row = payload["zh_cn"]["content"][0]
-        self.assertEqual(first_row[0], {"tag": "at", "user_id": raw_id, "user_name": "user"})
-        self.assertEqual(first_row[2], {"tag": "text", "text": "Hi!"})
+        self.assertEqual(payload["text"], f'<at user_id="{raw_id}">user</at> Hi!')
+        self.assertNotIn(f"@{raw_id} Hi!", payload["text"])
 
     @patch.dict(os.environ, {}, clear=True)
     def test_edit_preserves_sender_mention_for_streaming_message(self):
@@ -2138,11 +2135,9 @@ class TestAdapterBehavior(unittest.TestCase):
 
         self.assertTrue(result.success)
         body = captured["request"].request_body
-        self.assertEqual(body.msg_type, "post")
+        self.assertEqual(body.msg_type, "text")
         payload = json.loads(body.content)
-        first_row = payload["zh_cn"]["content"][0]
-        self.assertEqual(first_row[0], {"tag": "at", "user_id": "ou_user", "user_name": "张三"})
-        self.assertEqual(first_row[2], {"tag": "text", "text": "updated"})
+        self.assertEqual(payload["text"], '<at user_id="ou_user">张三</at> updated')
 
     @patch.dict(os.environ, {}, clear=True)
     def test_send_uses_metadata_reply_target_for_threaded_feishu_topic(self):
