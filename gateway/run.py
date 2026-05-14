@@ -12290,18 +12290,34 @@ class GatewayRunner:
     ) -> Optional[Dict[str, Any]]:
         """Build the metadata dict platforms need for thread-aware replies."""
         thread_id = getattr(source, "thread_id", None)
-        if thread_id is None:
-            return None
-        metadata: Dict[str, Any] = {"thread_id": thread_id}
+        metadata: Dict[str, Any] = {"thread_id": thread_id} if thread_id is not None else {}
         if (
-            getattr(source, "platform", None) == Platform.TELEGRAM
+            thread_id is not None
+            and getattr(source, "platform", None) == Platform.TELEGRAM
             and getattr(source, "chat_type", None) == "dm"
         ):
             metadata["telegram_dm_topic_reply_fallback"] = True
             anchor = reply_to_message_id or getattr(source, "message_id", None)
             if anchor is not None:
                 metadata["telegram_reply_to_message_id"] = str(anchor)
-        return metadata
+        if (
+            getattr(source, "platform", None) == Platform.FEISHU
+            and str(getattr(source, "chat_type", "") or "").lower()
+            in {"group", "forum"}
+        ):
+            mention_user_id = (
+                getattr(source, "_feishu_mention_user_id", None)
+                or getattr(source, "user_id", None)
+            )
+            if mention_user_id:
+                metadata["feishu_mention_user_id"] = str(mention_user_id)
+                mention_name = (
+                    getattr(source, "_feishu_mention_user_name", None)
+                    or getattr(source, "user_name", None)
+                )
+                if mention_name:
+                    metadata["feishu_mention_user_name"] = str(mention_name)
+        return metadata or None
 
     @staticmethod
     def _reply_anchor_for_event(event: MessageEvent) -> Optional[str]:

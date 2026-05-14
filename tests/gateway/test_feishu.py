@@ -1881,6 +1881,16 @@ class TestAdapterBehavior(unittest.TestCase):
 
         event = adapter._dispatch_inbound_event.await_args.args[0]
         self.assertEqual(event.source.chat_type, "group")
+        self.assertEqual(getattr(event.source, "_feishu_mention_user_id", None), "ou_user")
+        self.assertEqual(getattr(event.source, "_feishu_mention_user_name", None), "张三")
+        from gateway.platforms.base import _thread_metadata_for_source
+        self.assertEqual(
+            _thread_metadata_for_source(event.source),
+            {
+                "feishu_mention_user_id": "ou_user",
+                "feishu_mention_user_name": "张三",
+            },
+        )
 
     @patch.dict(os.environ, {}, clear=True)
     def test_process_inbound_message_fetches_reply_to_text(self):
@@ -1961,6 +1971,135 @@ class TestAdapterBehavior(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.message_id, "om_reply")
         self.assertTrue(captured["request"].request_body.reply_in_thread)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_send_mentions_original_sender_for_group_reply(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        captured = {}
+
+        class _MessageAPI:
+            def reply(self, request):
+                captured["request"] = request
+                return SimpleNamespace(
+                    success=lambda: True,
+                    data=SimpleNamespace(message_id="om_reply"),
+                )
+
+        adapter._client = SimpleNamespace(
+            im=SimpleNamespace(v1=SimpleNamespace(message=_MessageAPI()))
+        )
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("gateway.platforms.feishu.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(
+                adapter.send(
+                    chat_id="oc_chat",
+                    content="hello",
+                    reply_to="om_parent",
+                    metadata={
+                        "feishu_mention_user_id": "ou_user",
+                        "feishu_mention_user_name": "张三",
+                    },
+                )
+            )
+
+        self.assertTrue(result.success)
+        body = captured["request"].request_body
+        self.assertEqual(body.msg_type, "post")
+        payload = json.loads(body.content)
+        first_row = payload["zh_cn"]["content"][0]
+        self.assertEqual(first_row[0], {"tag": "at", "user_id": "ou_user", "user_name": "张三"})
+        self.assertEqual(first_row[1], {"tag": "text", "text": " "})
+        self.assertEqual(first_row[2], {"tag": "text", "text": "hello"})
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_send_mention_does_not_display_raw_open_id_when_name_missing(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        captured = {}
+
+        class _MessageAPI:
+            def reply(self, request):
+                captured["request"] = request
+                return SimpleNamespace(
+                    success=lambda: True,
+                    data=SimpleNamespace(message_id="om_reply"),
+                )
+
+        adapter._client = SimpleNamespace(
+            im=SimpleNamespace(v1=SimpleNamespace(message=_MessageAPI()))
+        )
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        raw_id = "ou_f58197eab3309e7f287046f37969d8d8"
+        with patch("gateway.platforms.feishu.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(
+                adapter.send(
+                    chat_id="oc_chat",
+                    content="Hi!",
+                    reply_to="om_parent",
+                    metadata={
+                        "feishu_mention_user_id": raw_id,
+                    },
+                )
+            )
+
+        self.assertTrue(result.success)
+        body = captured["request"].request_body
+        payload = json.loads(body.content)
+        first_row = payload["zh_cn"]["content"][0]
+        self.assertEqual(first_row[0], {"tag": "at", "user_id": raw_id, "user_name": "user"})
+        self.assertNotEqual(first_row[0]["user_name"], raw_id)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_edit_preserves_sender_mention_for_streaming_message(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        adapter._remember_outbound_mention("om_stream", user_id="ou_user", user_name="张三")
+        captured = {}
+
+        class _MessageAPI:
+            def update(self, request):
+                captured["request"] = request
+                return SimpleNamespace(
+                    success=lambda: True,
+                    data=SimpleNamespace(message_id="om_stream"),
+                )
+
+        adapter._client = SimpleNamespace(
+            im=SimpleNamespace(v1=SimpleNamespace(message=_MessageAPI()))
+        )
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("gateway.platforms.feishu.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(
+                adapter.edit_message(
+                    chat_id="oc_chat",
+                    message_id="om_stream",
+                    content="updated",
+                )
+            )
+
+        self.assertTrue(result.success)
+        body = captured["request"].request_body
+        self.assertEqual(body.msg_type, "post")
+        payload = json.loads(body.content)
+        first_row = payload["zh_cn"]["content"][0]
+        self.assertEqual(first_row[0], {"tag": "at", "user_id": "ou_user", "user_name": "张三"})
+        self.assertEqual(first_row[2], {"tag": "text", "text": "updated"})
 
     @patch.dict(os.environ, {}, clear=True)
     def test_send_uses_metadata_reply_target_for_threaded_feishu_topic(self):

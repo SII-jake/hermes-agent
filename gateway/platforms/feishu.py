@@ -558,6 +558,40 @@ def _build_markdown_post_payload(content: str) -> str:
     )
 
 
+def _is_feishu_raw_user_id(value: str) -> bool:
+    return value.startswith(("ou_", "u_", "on_"))
+
+
+def _safe_mention_display_name(*, user_id: str, user_name: str = "") -> str:
+    display = (user_name or "").strip()
+    if display and display != user_id and not _is_feishu_raw_user_id(display):
+        return display
+    return "user"
+
+
+def _build_mention_post_payload(content: str, *, user_id: str, user_name: str = "") -> str:
+    display_name = _safe_mention_display_name(user_id=user_id, user_name=user_name)
+    at_tag: Dict[str, str] = {"tag": "at", "user_id": user_id, "user_name": display_name}
+    prefix_row: List[Dict[str, str]] = [at_tag, {"tag": "text", "text": " "}]
+
+    if not content:
+        rows = [prefix_row]
+    elif _MARKDOWN_HINT_RE.search(content) and not _MARKDOWN_TABLE_RE.search(content):
+        body_rows = _build_markdown_post_rows(content)
+        rows = [prefix_row + body_rows[0], *body_rows[1:]]
+    else:
+        rows = [prefix_row + [{"tag": "text", "text": content}]]
+
+    return json.dumps(
+        {
+            "zh_cn": {
+                "content": rows,
+            }
+        },
+        ensure_ascii=False,
+    )
+
+
 def _build_markdown_post_rows(content: str) -> List[List[Dict[str, str]]]:
     """Build Feishu post rows while isolating fenced code blocks.
 
@@ -1448,6 +1482,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._chat_locks: Dict[str, asyncio.Lock] = {}  # chat_id → lock (per-chat serial processing)
         self._sent_message_ids_to_chat: Dict[str, str] = {}  # message_id → chat_id (for reaction routing)
         self._sent_message_id_order: List[str] = []  # LRU order for _sent_message_ids_to_chat
+        self._outbound_mentions_by_message_id: "OrderedDict[str, tuple[str, str]]" = OrderedDict()
         self._chat_info_cache: Dict[str, Dict[str, Any]] = {}
         self._message_text_cache: Dict[str, Optional[str]] = {}
         self._app_lock_identity: Optional[str] = None
@@ -1768,10 +1803,17 @@ class FeishuAdapter(BasePlatformAdapter):
         formatted = self.format_message(content)
         chunks = self.truncate_message(formatted, self.MAX_MESSAGE_LENGTH)
         last_response = None
+        mention_user_id, mention_user_name = self._mention_from_send_metadata(metadata)
 
         try:
-            for chunk in chunks:
-                msg_type, payload = self._build_outbound_payload(chunk)
+            for index, chunk in enumerate(chunks):
+                chunk_mention_id = mention_user_id if index == 0 else ""
+                chunk_mention_name = mention_user_name if index == 0 else ""
+                msg_type, payload = self._build_outbound_payload(
+                    chunk,
+                    mention_user_id=chunk_mention_id,
+                    mention_user_name=chunk_mention_name,
+                )
                 try:
                     response = await self._feishu_send_with_retry(
                         chat_id=chat_id,
@@ -1787,7 +1829,16 @@ class FeishuAdapter(BasePlatformAdapter):
                     response = await self._feishu_send_with_retry(
                         chat_id=chat_id,
                         msg_type="text",
-                        payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
+                        payload=json.dumps(
+                            {
+                                "text": self._plain_text_with_mention_prefix(
+                                    _strip_markdown_to_plain_text(chunk),
+                                    user_id=chunk_mention_id,
+                                    user_name=chunk_mention_name,
+                                )
+                            },
+                            ensure_ascii=False,
+                        ),
                         reply_to=reply_to,
                         metadata=metadata,
                     )
@@ -1800,10 +1851,24 @@ class FeishuAdapter(BasePlatformAdapter):
                     response = await self._feishu_send_with_retry(
                         chat_id=chat_id,
                         msg_type="text",
-                        payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
+                        payload=json.dumps(
+                            {
+                                "text": self._plain_text_with_mention_prefix(
+                                    _strip_markdown_to_plain_text(chunk),
+                                    user_id=chunk_mention_id,
+                                    user_name=chunk_mention_name,
+                                )
+                            },
+                            ensure_ascii=False,
+                        ),
                         reply_to=reply_to,
                         metadata=metadata,
                     )
+                self._remember_outbound_mention(
+                    self._extract_response_field(response, "message_id"),
+                    user_id=chunk_mention_id,
+                    user_name=chunk_mention_name,
+                )
                 last_response = response
 
             return self._finalize_send_result(last_response, "send failed")
@@ -1825,7 +1890,12 @@ class FeishuAdapter(BasePlatformAdapter):
 
         content = self.format_message(content)
         try:
-            msg_type, payload = self._build_outbound_payload(content)
+            mention_user_id, mention_user_name = self._mention_for_message_id(message_id)
+            msg_type, payload = self._build_outbound_payload(
+                content,
+                mention_user_id=mention_user_id,
+                mention_user_name=mention_user_name,
+            )
             body = self._build_update_message_body(msg_type=msg_type, content=payload)
             request = self._build_update_message_request(message_id=message_id, request_body=body)
             response = await asyncio.to_thread(self._client.im.v1.message.update, request)
@@ -1834,7 +1904,16 @@ class FeishuAdapter(BasePlatformAdapter):
                 logger.warning("[Feishu] Invalid post update payload rejected by API; falling back to plain text")
                 fallback_body = self._build_update_message_body(
                     msg_type="text",
-                    content=json.dumps({"text": _strip_markdown_to_plain_text(content)}, ensure_ascii=False),
+                    content=json.dumps(
+                        {
+                            "text": self._plain_text_with_mention_prefix(
+                                _strip_markdown_to_plain_text(content),
+                                user_id=mention_user_id,
+                                user_name=mention_user_name,
+                            )
+                        },
+                        ensure_ascii=False,
+                    ),
                 )
                 fallback_request = self._build_update_message_request(message_id=message_id, request_body=fallback_body)
                 fallback_response = await asyncio.to_thread(self._client.im.v1.message.update, fallback_request)
@@ -3026,7 +3105,14 @@ class FeishuAdapter(BasePlatformAdapter):
             thread_id=thread_id,
             user_id_alt=sender_profile["user_id_alt"],
             is_bot=is_bot,
+            message_id=message_id,
         )
+        source._feishu_mention_user_id = (
+            getattr(sender_id, "open_id", None)
+            or sender_profile["user_id"]
+            or ""
+        )
+        source._feishu_mention_user_name = sender_profile["user_name"] or ""
         normalized = MessageEvent(
             text=text,
             message_type=inbound_type,
@@ -4231,7 +4317,58 @@ class FeishuAdapter(BasePlatformAdapter):
     # Outbound payload construction and send pipeline
     # =========================================================================
 
-    def _build_outbound_payload(self, content: str) -> tuple[str, str]:
+    @staticmethod
+    def _mention_from_send_metadata(metadata: Optional[Dict[str, Any]]) -> tuple[str, str]:
+        if not isinstance(metadata, dict):
+            return "", ""
+        user_id = str(metadata.get("feishu_mention_user_id") or "").strip()
+        if not user_id:
+            return "", ""
+        return user_id, str(metadata.get("feishu_mention_user_name") or "").strip()
+
+    @staticmethod
+    def _plain_text_with_mention_prefix(content: str, *, user_id: str, user_name: str) -> str:
+        if not user_id:
+            return content
+        label = _safe_mention_display_name(user_id=user_id, user_name=user_name)
+        return f"@{label} {content}" if content else f"@{label}"
+
+    def _remember_outbound_mention(self, message_id: Optional[str], *, user_id: str, user_name: str) -> None:
+        if not message_id or not user_id:
+            return
+        mentions = getattr(self, "_outbound_mentions_by_message_id", None)
+        if mentions is None:
+            mentions = OrderedDict()
+            self._outbound_mentions_by_message_id = mentions
+        mentions[str(message_id)] = (str(user_id), str(user_name or ""))
+        mentions.move_to_end(str(message_id))
+        while len(mentions) > _FEISHU_BOT_MSG_TRACK_SIZE:
+            mentions.popitem(last=False)
+
+    def _mention_for_message_id(self, message_id: str) -> tuple[str, str]:
+        mentions = getattr(self, "_outbound_mentions_by_message_id", None)
+        if not mentions or not message_id:
+            return "", ""
+        mention = mentions.get(str(message_id))
+        if not mention:
+            return "", ""
+        mentions.move_to_end(str(message_id))
+        return mention
+
+    def _build_outbound_payload(
+        self,
+        content: str,
+        *,
+        mention_user_id: str = "",
+        mention_user_name: str = "",
+    ) -> tuple[str, str]:
+        mention_user_id = (mention_user_id or "").strip()
+        if mention_user_id:
+            return "post", _build_mention_post_payload(
+                content,
+                user_id=mention_user_id,
+                user_name=(mention_user_name or "").strip(),
+            )
         # Feishu post-type 'md' elements do not render markdown tables; sending
         # table content as post causes the message to appear blank on the client.
         # Force plain text for anything that looks like a markdown table.

@@ -51,15 +51,34 @@ def _thread_metadata_for_source(source, reply_to_message_id: str | None = None) 
     lanes so the Telegram adapter can avoid the known-bad partial routes.
     """
     thread_id = getattr(source, "thread_id", None)
-    if thread_id is None:
-        return None
-    metadata = {"thread_id": thread_id}
-    if _platform_name(getattr(source, "platform", None)) == "telegram" and getattr(source, "chat_type", None) == "dm":
+    metadata = {"thread_id": thread_id} if thread_id is not None else {}
+    platform_name = _platform_name(getattr(source, "platform", None))
+    if (
+        thread_id is not None
+        and platform_name == "telegram"
+        and getattr(source, "chat_type", None) == "dm"
+    ):
         metadata["telegram_dm_topic_reply_fallback"] = True
         anchor = reply_to_message_id or getattr(source, "message_id", None)
         if anchor is not None:
             metadata["telegram_reply_to_message_id"] = str(anchor)
-    return metadata
+    if (
+        platform_name == "feishu"
+        and str(getattr(source, "chat_type", "") or "").lower() in {"group", "forum"}
+    ):
+        mention_user_id = (
+            getattr(source, "_feishu_mention_user_id", None)
+            or getattr(source, "user_id", None)
+        )
+        if mention_user_id:
+            metadata["feishu_mention_user_id"] = str(mention_user_id)
+            mention_name = (
+                getattr(source, "_feishu_mention_user_name", None)
+                or getattr(source, "user_name", None)
+            )
+            if mention_name:
+                metadata["feishu_mention_user_name"] = str(mention_name)
+    return metadata or None
 
 
 def _reply_anchor_for_event(event) -> str | None:
