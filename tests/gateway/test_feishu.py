@@ -2101,6 +2101,51 @@ class TestAdapterBehavior(unittest.TestCase):
         self.assertNotIn(f"@{raw_id} Hi!", payload["text"])
 
     @patch.dict(os.environ, {}, clear=True)
+    def test_send_mention_strips_leading_raw_open_id_for_other_user(self):
+        from gateway.config import PlatformConfig
+        from gateway.platforms.feishu import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        captured = {}
+
+        class _MessageAPI:
+            def reply(self, request):
+                captured["request"] = request
+                return SimpleNamespace(
+                    success=lambda: True,
+                    data=SimpleNamespace(message_id="om_reply"),
+                )
+
+        adapter._client = SimpleNamespace(
+            im=SimpleNamespace(v1=SimpleNamespace(message=_MessageAPI()))
+        )
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        sender_id = "ou_294c35eaa241fb82eedbfc45da4a58e0"
+        raw_prefix = "ou_f58197eab3309e7f287046f37969d8d8"
+        with patch("gateway.platforms.feishu.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(
+                adapter.send(
+                    chat_id="oc_chat",
+                    content=f"@{raw_prefix} Hi!",
+                    reply_to="om_parent",
+                    metadata={
+                        "feishu_mention_user_id": sender_id,
+                        "feishu_mention_user_name": "THEUSER",
+                    },
+                )
+            )
+
+        self.assertTrue(result.success)
+        body = captured["request"].request_body
+        self.assertEqual(body.msg_type, "text")
+        payload = json.loads(body.content)
+        self.assertEqual(payload["text"], f'<at user_id="{sender_id}">THEUSER</at> Hi!')
+        self.assertNotIn(f"@{raw_prefix}", payload["text"])
+
+    @patch.dict(os.environ, {}, clear=True)
     def test_edit_preserves_sender_mention_for_streaming_message(self):
         from gateway.config import PlatformConfig
         from gateway.platforms.feishu import FeishuAdapter

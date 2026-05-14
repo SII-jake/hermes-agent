@@ -161,6 +161,7 @@ _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _MARKDOWN_FENCE_OPEN_RE = re.compile(r"^```([^\n`]*)\s*$")
 _MARKDOWN_FENCE_CLOSE_RE = re.compile(r"^```\s*$")
 _MENTION_RE = re.compile(r"@_user_\d+")
+_RAW_FEISHU_ID_MENTION_PREFIX_RE = re.compile(r"^@(ou|u|on)_[A-Za-z0-9]+(?=$|[\s\t\n\r.,;:!?、，。；：！？()\[\]{}<>\"'`])")
 _MULTISPACE_RE = re.compile(r"[ \t]{2,}")
 _POST_CONTENT_INVALID_RE = re.compile(r"content format of the post type is incorrect", re.IGNORECASE)
 # ---------------------------------------------------------------------------
@@ -590,6 +591,9 @@ def _strip_redundant_leading_mention_text(content: str, *, user_id: str, user_na
         if after and after[0] not in _MENTION_BOUNDARY_CHARS:
             continue
         return after.lstrip()
+    raw_id_match = _RAW_FEISHU_ID_MENTION_PREFIX_RE.match(remaining)
+    if raw_id_match:
+        return remaining[raw_id_match.end():].lstrip()
     return text
 
 
