@@ -1851,7 +1851,7 @@ class FeishuAdapter(BasePlatformAdapter):
                     logger.info(
                         "[Feishu] Outbound sender mention payload: chat_id=%s reply_to=%s "
                         "msg_type=%s mention_user_id=%s mention_user_name=%r "
-                        "stripped_leading_text_mention=%s original_prefix=%r payload=%s",
+                        "stripped_leading_text_mention=%s original_prefix=%r meta=%s payload=%s",
                         chat_id,
                         reply_to or "",
                         msg_type,
@@ -1859,6 +1859,7 @@ class FeishuAdapter(BasePlatformAdapter):
                         chunk_mention_name,
                         stripped_chunk != chunk,
                         _short_log_text(chunk, 180),
+                        metadata,
                         _short_log_text(payload, 800),
                     )
                 try:
@@ -4853,6 +4854,7 @@ class FeishuAdapter(BasePlatformAdapter):
             return (
                 CreateMessageRequestBody.builder()
                 .receive_id(receive_id)
+                .reply_in_thread(True)
                 .msg_type(msg_type)
                 .content(content)
                 .uuid(uuid_value)
