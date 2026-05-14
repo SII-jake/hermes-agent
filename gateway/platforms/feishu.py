@@ -394,6 +394,7 @@ class FeishuAdapterSettings:
     group_rules: Dict[str, FeishuGroupRule] = field(default_factory=dict)
     allow_bots: str = "none"  # "none" | "mentions" | "all"
     require_mention: bool = True
+    response_mention: bool = False
 
 
 @dataclass
@@ -605,6 +606,7 @@ def _build_mention_text_payload(content: str, *, user_id: str, user_name: str = 
         user_name=user_name,
     )
     display_name = _safe_mention_display_name(user_id=user_id, user_name=user_name)
+
     at_prefix = (
         f'<at user_id="{html.escape(user_id, quote=True)}">'
         f"{html.escape(display_name)}"
@@ -1624,6 +1626,9 @@ class FeishuAdapter(BasePlatformAdapter):
             require_mention=_to_boolean(
                 extra.get("require_mention", os.getenv("FEISHU_REQUIRE_MENTION", "true"))
             ),
+            response_mention=_to_boolean(
+                extra.get("response_mention", os.getenv("FEISHU_RESPONSE_MENTION", "false"))
+            )
         )
 
     def _apply_settings(self, settings: FeishuAdapterSettings) -> None:
@@ -1656,6 +1661,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._ws_ping_timeout = settings.ws_ping_timeout
         self._allow_bots = settings.allow_bots
         self._require_mention = settings.require_mention
+        self._response_mention = settings.response_mention
 
     def _build_event_handler(self) -> Any:
         if EventDispatcherHandler is None:
@@ -4428,7 +4434,7 @@ class FeishuAdapter(BasePlatformAdapter):
         mention_user_name: str = "",
     ) -> tuple[str, str]:
         mention_user_id = (mention_user_id or "").strip()
-        if mention_user_id:
+        if self._response_mention and mention_user_id:
             return "text", _build_mention_text_payload(
                 content,
                 user_id=mention_user_id,
