@@ -12305,6 +12305,8 @@ class GatewayRunner:
             and str(getattr(source, "chat_type", "") or "").lower()
             in {"group", "forum"}
         ):
+            if thread_id is not None and reply_to_message_id is not None:
+                metadata["reply_to_message_id"] = str(reply_to_message_id)
             mention_user_id = (
                 getattr(source, "_feishu_mention_user_id", None)
                 or getattr(source, "user_id", None)

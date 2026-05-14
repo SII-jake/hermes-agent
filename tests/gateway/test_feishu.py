@@ -2178,6 +2178,26 @@ class TestAdapterBehavior(unittest.TestCase):
         self.assertEqual(captured["request"].message_id, "om_trigger")
         self.assertTrue(captured["request"].request_body.reply_in_thread)
 
+    def test_thread_metadata_carries_feishu_reply_target_for_topic(self):
+        from gateway.config import Platform
+        from gateway.platforms.base import _thread_metadata_for_source
+        from gateway.session import SessionSource
+
+        source = SessionSource(
+            platform=Platform.FEISHU,
+            chat_id="oc_chat",
+            chat_type="group",
+            user_id="ou_user",
+            user_name="THEUSER",
+            thread_id="omt-thread",
+        )
+
+        metadata = _thread_metadata_for_source(source, "om_trigger")
+
+        self.assertEqual(metadata["thread_id"], "omt-thread")
+        self.assertEqual(metadata["reply_to_message_id"], "om_trigger")
+        self.assertEqual(metadata["feishu_mention_user_id"], "ou_user")
+
     @patch.dict(os.environ, {}, clear=True)
     def test_send_retries_transient_failure(self):
         from gateway.config import PlatformConfig
